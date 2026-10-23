@@ -1,11 +1,7 @@
 
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application
-        android:allowBackup="false"
-        android:label="Daily Expense Tracker"
-        android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+    <application android:label="Daily Expense Tracker">
         <activity
             android:name="com.example.dailyexpensetracker.MainActivity"
             android:exported="true">
