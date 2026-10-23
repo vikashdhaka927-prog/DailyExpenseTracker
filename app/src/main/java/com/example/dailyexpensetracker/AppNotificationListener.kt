@@ -5,6 +5,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 class AppNotificationListener : NotificationListenerService() {
 
@@ -31,14 +32,16 @@ class AppNotificationListener : NotificationListenerService() {
                 MODE_PRIVATE
             )
 
-            val records = JSONArray(
+            val notificationId = "$packageName|${sbn.key}|${sbn.postTime}"
+
+            // Save all notifications
+            val notifications = JSONArray(
                 prefs.getString("saved_notifications", "[]") ?: "[]"
             )
 
-            val id = "$packageName|${sbn.key}|${sbn.postTime}"
-
-            for (i in 0 until records.length()) {
-                if (records.optJSONObject(i)?.optString("id") == id) {
+            for (i in 0 until notifications.length()) {
+                if (notifications.optJSONObject(i)
+                        ?.optString("id") == notificationId) {
                     return
                 }
             }
@@ -50,24 +53,18 @@ class AppNotificationListener : NotificationListenerService() {
                 packageName
             }
 
-            val searchable = "$packageName $appName $title $text"
-                .lowercase()
-
-            val keywords = listOf(
-                "upi", "credited", "debited", "debit", "credit",
-                "transaction", "txn", "payment", "paid", "received",
-                "bank", "account", "a/c", "rs.", "inr", "₹",
-                "gpay", "google pay", "phonepe", "paytm",
-                "bhim", "imps", "neft", "rtgs", "withdrawal",
-                "spent", "purchase", "refund", "balance"
-            )
+            val fullText = "$title $text"
+            val lower = fullText.lowercase(Locale.ROOT)
 
             val category = if (
-                keywords.any { searchable.contains(it) }
+                listOf(
+                    "upi", "bank", "credited", "debited", "payment",
+                    "transaction", "phonepe", "paytm", "gpay"
+                ).any { lower.contains(it) }
             ) "Bank/UPI" else "Other"
 
-            records.put(JSONObject().apply {
-                put("id", id)
+            notifications.put(JSONObject().apply {
+                put("id", notificationId)
                 put("app", appName)
                 put("packageName", packageName)
                 put("title", title)
@@ -76,19 +73,76 @@ class AppNotificationListener : NotificationListenerService() {
                 put("category", category)
             })
 
-            val trimmed = JSONArray()
-            val start = (records.length() - 2000).coerceAtLeast(0)
+            // Keep the latest 2000 notifications
+            val savedNotifications = JSONArray()
+            val start = (notifications.length() - 2000).coerceAtLeast(0)
 
-            for (i in start until records.length()) {
-                trimmed.put(records.getJSONObject(i))
+            for (i in start until notifications.length()) {
+                savedNotifications.put(notifications.getJSONObject(i))
             }
 
             prefs.edit()
-                .putString("saved_notifications", trimmed.toString())
+                .putString("saved_notifications", savedNotifications.toString())
+                .apply()
+
+            // Auto-add only clear debit notifications
+            val creditWords = listOf(
+                "credited", "credit received", "money received",
+                "received from", "refund received"
+            )
+
+            val debitWords = listOf(
+                "debited", "debit", "spent", "paid",
+                "purchase", "withdrawn", "sent to"
+            )
+
+            val isCredit = creditWords.any { lower.contains(it) }
+            val isDebit = debitWords.any { lower.contains(it) }
+
+            if (isCredit || !isDebit) return
+
+            // Extract amount only when currency is clearly mentioned
+            val amountRegex = Regex(
+                """(?:₹|rs\.?|inr)\s*([0-9,]+(?:\.[0-9]{1,2})?)""",
+                RegexOption.IGNORE_CASE
+            )
+
+            val amountText = amountRegex.find(fullText)
+                ?.groupValues?.get(1)
+                ?: return
+
+            val amount = amountText.replace(",", "").toDoubleOrNull()
+                ?: return
+
+            if (!amount.isFinite() || amount <= 0) return
+
+            // Prevent the same notification being added twice
+            val transactions = JSONArray(
+                prefs.getString("transactions", "[]") ?: "[]"
+            )
+
+            for (i in 0 until transactions.length()) {
+                if (transactions.optJSONObject(i)
+                        ?.optString("notificationId") == notificationId) {
+                    return
+                }
+            }
+
+            transactions.put(JSONObject().apply {
+                put("id", sbn.postTime)
+                put("amount", amount)
+                put("category", "Other")
+                put("note", "$appName: $fullText")
+                put("timestamp", sbn.postTime)
+                put("notificationId", notificationId)
+            })
+
+            prefs.edit()
+                .putString("transactions", transactions.toString())
                 .apply()
 
         } catch (_: Exception) {
-            // Ek notification process na ho to app crash na kare.
+            // Ignore malformed notifications safely.
         }
     }
 }
